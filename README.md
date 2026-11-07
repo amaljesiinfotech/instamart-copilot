@@ -1,55 +1,215 @@
-# instamart-copilot
-About My Capstone project
-Customer Intelligence & Support Copilot — Teaching Kit
-Educational implementation of the supplied fictional Instamart-style capstone. All generated records are synthetic; no real customer data, hosted LLM, API key, or network call is needed.
-Learning outcomes
-Students learn to (1) fetch/read CSV exports and audit data, (2) clean and persist trusted tables in SQLite, (3) write SQL and pandas analytics, (4) segment customers and train a leakage-aware lapse model, (5) redact PII and triage text with retries/output validation, and (6) retrieve policy passages and execute bounded database-backed tools.
-Setup and run
-Python 3.11+ recommended.
-python -m venv .venv
-# Windows PowerShell:
-.venv\Scripts\Activate.ps1
-# macOS/Linux:
-# source .venv/bin/activate
-python -m pip install --upgrade pip
-pip install -r requirements.txt
-python generate_data.py
-python run_project.py
-Open notebooks/Customer_Intelligence_Support_Copilot.ipynb and run cells from top to bottom. The notebook calls the same modules used by the scripts.
-Repository map
-generate_data.py: deterministic fictional CSV and policy generation.
-mock_llm.py: offline stand-in for classification, policy answers and agent tool calls.
-src/data_pipeline.py: audit, clean, SQLite load, validation.
-src/customer_models.py: RFM, K-means, PCA, lapse model with train/test separation.
-src/triage.py: token guardrails, PII redaction, retries, response validation, routing.
-src/policy_rag.py: chunking, TF-IDF retrieval and grounded policy evaluation.
-src/refund_agent.py: order lookup, refund calculation, ledger and bounded tool loop.
-sql/queries.sql: seven SQL learning patterns.
-outputs/: generated artifacts; state/: agent checkpoint examples.
-How students should learn the data-fetching flow
-pd.read_csv("data/raw/orders.csv", keep_default_na=False) loads local export rows. In a production project, a fetch function might download from an approved endpoint or query a warehouse, but this exercise intentionally uses local synthetic data and has no credentials.
-Inspect shape, data types, null/blank counts, duplicate rows, keys and impossible values before cleaning.
-Apply one documented cleaning rule at a time and compare row/value counts before and after.
-Write clean CSVs for easy inspection and SQLite tables for repeatable SQL queries.
-Run assertions before downstream modelling. A failed assertion should stop the pipeline rather than silently propagate bad data.
-Part A — Data foundation
-The pipeline standardizes city/gender, treats invalid ages as missing, resolves duplicate orders by keeping the latest timestamp, imputes missing amounts from catalogue price, sets negative delivery times to missing and imputes only completed-order delivery durations by product category. Review every rule before teaching; the capstone handout's numeric checkpoints should be used as acceptance tests.
-Part B — Segments and lapse
-RFM uses completed orders and a fixed snapshot date. K-means diagnostics compare K=2..8; the notebook starts with K=4 for interpretable teaching. Lapse features use orders strictly before 2025-09-01, while the label uses September outcomes. The pipeline uses a preprocessing Pipeline fitted on training rows, GridSearchCV and a saved joblib model. The Premium retention list is illustrative only because the Premium label uses the whole RFM window and is post-hoc; it is not a leakage-free evaluation.
-Part C — Ticket triage and privacy
-Empty and overlong tickets are skipped before model calls. Email, phone and order ID patterns are redacted before prompting. Retries handle simulated transient errors. JSON category values are allow-listed; malformed outputs are accepted only when exactly one allowed category is detectable using re.findall. Human review receives guardrail/invalid/budget cases, fraud goes to security, premium customers go to the premium desk, and the rest go to the support queue.
-Part D — Policy retrieval and refund tools
-Policy documents are chunked with overlap, represented with TfidfVectorizer, and ranked using cosine similarity. The offline mock returns context-derived sentences. Refund rules are implemented in Python tools backed by SQLite: completed orders delivered in over 45 minutes qualify for a full refund; orders over INR 1000 escalate instead of auto-issuing. This is a teaching simulation, not a payment integration.
-GitHub suggestions
-These public repositories/documentation projects are useful for learning concepts; do not copy a student's capstone solution. Adapt the patterns and cite the source in your notes:
-pandas documentation: https://github.com/pandas-dev/pandas — CSV loading, cleaning, groupby, pivot tables.
-scikit-learn: https://github.com/scikit-learn/scikit-learn — pipelines, preprocessing, clustering, model selection, metrics and TF-IDF.
-Python tutorial: https://github.com/python/cpython/tree/main/Doc/tutorial — Python fundamentals.
-Jupyter Notebook: https://github.com/jupyter/notebook — notebook workflow.
-SQLite: https://github.com/sqlite/sqlite — SQL database engine (official mirror).
-scikit-learn text feature extraction guide: https://scikit-learn.org/stable/modules/feature_extraction.html#text-feature-extraction.
-Limitations and next steps
-This is a teaching implementation and may need adjustment to match every numeric checkpoint in a strict grading rubric; compare actual outputs with the supplied brief and investigate differences rather than hardcoding expected answers.
-The offline mock model is deterministic rule-based simulation, not a real language model.
-The refund ledger is a local JSONL audit trail, not a real transaction system.
-Production work would add access controls, secure secret management, monitoring, schema contracts, data lineage, model drift checks and human approval workflows.
+# Instamart Customer Intelligence & Support Copilot
+
+## Overview
+
+This repository contains the capstone project for the IIT Patna programme (via Masai): a Customer Intelligence & Support Copilot for a fictional Instamart quick-commerce business. All data is synthetic and generated by `generate_data.py`. All monetary values are in Indian Rupees (INR).
+
+The project has four connected parts:
+
+- **Part A:** clean the raw exports, store them in SQLite, and query them with SQL and pandas.
+- **Part B:** segment customers with K-means and predict customer lapse.
+- **Part C:** triage support tickets with privacy and input guardrails.
+- **Part D:** a policy question-answering assistant and a refund agent.
+
+`generate_data.py` and `mock_llm.py` are the supplied files and are unmodified.
+
+## Reproduce
+
+Run from the repository root (Python 3.11 or newer):
+
+1. `python3 -m venv .venv`
+2. `source .venv/bin/activate`
+3. `pip install -r requirements.txt`
+4. `python generate_data.py` (last line printed: `generated: customers=1200 products=40 orders_raw=13084 tickets=164`)
+5. `python src/a1_audit.py`
+6. `python src/a2_clean.py`
+7. `python src/a3_validate.py` (prints `ALL CHECKPOINTS PASSED`)
+8. `python src/a4_sql.py`
+9. `python src/a5_pandas.py`
+10. `python src/b1_rfm.py`
+11. `python src/b2_kmeans.py`
+
+[Add the remaining Part B, C and D commands here as you build them, in running order, ending with the last script.]
+
+## Part A: Data Foundation: Clean, Store, Query
+
+### Audit of raw data
+
+| Table | Shape |
+|---|---|
+| customers | 1,200 rows × 5 columns |
+| products | 40 rows × 4 columns |
+| orders | 13,084 rows × 9 columns |
+
+Data types (pandas shows text columns as `str`):
+
+| Table | Column types |
+|---|---|
+| customers | customer_id, city, signup_date, gender: str; age: float64 |
+| products | product_id, product_name, category: str; price_inr: int64 |
+| orders | order_id, customer_id, product_id, order_ts, status, order_amount: str; quantity, discount_pct: int64; delivery_minutes: float64 |
+
+Missing values (count and % of rows), only columns with gaps:
+
+| Table | Column | Missing | % |
+|---|---|---|---|
+| customers | age | 61 | 5.08 |
+| customers | gender | 30 | 2.50 |
+| orders | order_amount | 53 | 0.41 |
+| orders | delivery_minutes | 2,541 | 19.42 |
+
+All other columns in all three tables have 0 missing values (0.00%). Pandas reads the text `N/A` as missing automatically, which is why `order_amount` shows 53 missing here while 120 entries cannot be converted to a number (53 `N/A` plus 67 `error` strings).
+
+Audit figures:
+
+| Check | Result |
+|---|---|
+| Raw order rows | 13,084 |
+| Exact duplicate rows | 119 |
+| Rows with status pending | 656 |
+| Distinct order_id | 12,309 |
+| Non-numeric order_amount | 120 |
+| Negative delivery_minutes | 106 |
+| Blank delivery_minutes | 2,541 |
+| Blank age | 61 |
+| Ages outside 10–100 | 6 |
+| Distinct raw city spellings | 24 |
+| Distinct non-blank gender spellings | 10 |
+| Blank gender | 30 |
+
+### Cleaning rules
+
+**Customers**
+
+| Rule | Values changed |
+|---|---|
+| City: strip spaces and apply title case, leaving exactly six cities | all 1,200 rows standardised |
+| Gender: map every spelling to male, female or unknown (blank becomes unknown) | 30 blanks became unknown |
+| Age: values outside 10–100 set to missing | 6 |
+| Age: missing values filled with the city median (groupby and transform) | 67 (61 blank + 6 impossible) |
+| signup_date converted to datetime | all rows |
+
+Result: Pune 227, Delhi 210, Bengaluru 197, Chennai 191, Hyderabad 191, Mumbai 184; female 610, male 560, unknown 30; 0 missing ages and every age between 18 and 60.
+
+
+*Orders (applied in this order)**
+
+| # | Rule | Rows or values changed |
+|---|---|---|
+| 1 | order_ts converted to datetime | all rows |
+| 2 | Exact duplicate rows removed | 119 rows |
+| 3 | For each order_id keep only the record with the latest order_ts | 656 older (pending) rows removed |
+| 4 | order_amount converted to numeric (unparseable become missing), then filled with round(price_inr × quantity × (1 − discount_pct/100), 2) | 112 values filled |
+| 5a | Negative delivery_minutes set to missing | 105 values (106 in the raw file; one sat in a duplicate row removed in rule 2) |
+| 5b | Missing delivery_minutes of completed orders filled with the median of the product category among completed orders (groupby and transform) | 774 values |
+| 5c | Cancelled orders keep delivery_minutes missing (never delivered, so imputing would invent data) | 1,199 left missing |
+
+Result: 12,309 rows (one per order_id); 11,110 completed and 1,199 cancelled; no pending rows; 0 missing order_amount; 0 missing delivery_minutes among completed orders and 1,199 missing among cancelled orders; completed-order revenue INR 2,998,668.80.
+
+### Storage and validation
+
+Clean tables were saved to `data/clean/` as CSV files and to `data/instamart.db` (tables `customers`, `products`, `orders`, with `order_ts` stored as text in the form YYYY-MM-DD HH:MM:SS). `src/a3_validate.py` asserts the reference checkpoints for orders, customers and the database, and prints `ALL CHECKPOINTS PASSED`.
+
+### SQL results (`sql/queries.sql`)
+
+Each query is run from Python with `pd.read_sql_query` in `src/a4_sql.py`. Only completed orders count as revenue or spend.
+
+| Query | Result |
+|---|---|
+| Q1 WHERE then HAVING | 30 customers |
+| Q2 three-table join | 30 rows; total INR 2,998,668.80; largest cell Bengaluru / Electronics INR 233,909.45 |
+| Q3 scalar subquery | 11 products priced above the average catalogue price |
+| Q4 LEFT JOIN | 25 customers with no completed order |
+| Q5 CTE | 550 customers above the average total spend of INR 2,552.06 |
+| Q6 window functions | 8 rows where RANK() differs from ROW_NUMBER() (top customers below) |
+| Q7 running total | 183 daily rows; last cumulative revenue INR 2,998,668.80 |
+
+Q6 top customer per city:
+
+| City | Customer | Total spend (INR) |
+|---|---|---|
+| Bengaluru | C0082 | 12,856.20 |
+| Chennai | C0930 | 10,151.40 |
+| Delhi | C0291 | 13,742.60 |
+| Hyderabad | C0743 | 12,730.05 |
+| Mumbai | C0693 | 14,766.55 |
+| Pune | C0426 | 10,377.10 |
+
+RANK() gives tied customers the same rank and skips the next number, while ROW_NUMBER() always gives each row a unique number, so after a tie the two values differ.
+
+### pandas cross-check
+
+The pivot table (`pd.pivot_table(..., margins=True)`) of completed revenue by city and category has a grand total of INR 2,998,668.80, equal to the SQL total from Q2. Selected pivot columns (INR):
+
+| City | Dairy | Electronics | Snacks | Total (all categories) |
+|---|---|---|---|---|
+| Bengaluru | 87,075.05 | 233,909.45 | 71,549.40 | 523,643.40 |
+| Chennai | 78,301.80 | 195,508.80 | 68,325.70 | 463,629.15 |
+| Delhi | 117,271.70 | 158,549.10 | 90,879.45 | 502,829.80 |
+| Hyderabad | 83,731.00 | 228,913.10 | 81,670.35 | 528,589.90 |
+| Mumbai | 75,209.85 | 214,738.40 | 72,122.10 | 479,058.50 |
+| Pune | 90,349.55 | 187,629.25 | 80,207.50 | 500,918.05 |
+| **Total** | 531,938.95 | 1,219,248.10 | 464,754.50 | **2,998,668.80** |
+
+Completed order_amount per city (groupby with named aggregation):
+
+| City | Sum (INR) | Mean (INR) | Count |
+|---|---|---|---|
+| Bengaluru | 523,643.40 | 276.47 | 1,894 |
+| Chennai | 463,629.15 | 272.72 | 1,700 |
+| Delhi | 502,829.80 | 243.62 | 2,064 |
+| Hyderabad | 528,589.90 | 284.95 | 1,855 |
+| Mumbai | 479,058.50 | 297.00 | 1,613 |
+| Pune | 500,918.05 | 252.48 | 1,984 |
+
+### Exploratory statistics (completed order_amount)
+
+| Statistic | Value |
+|---|---|
+| Mean | 269.91 |
+| Median | 135.00 |
+| Skewness | 4.61 |
+| Q1 | 64.80 |
+| Q3 | 297.00 |
+| IQR | 232.20 |
+| Lower fence (Q1 − 1.5×IQR) | −283.50 (0 outliers below) |
+| Upper fence (Q3 + 1.5×IQR) | 645.30 (897 outliers above) |
+
+Correlation matrix (completed orders):
+
+| | order_amount | discount_pct | quantity | delivery_minutes |
+|---|---|---|---|---|
+| order_amount | 1.000 | -0.095 | 0.087 | -0.003 |
+| discount_pct | -0.095 | 1.000 | -0.000 | -0.010 |
+| quantity | 0.087 | -0.000 | 1.000 | -0.013 |
+| delivery_minutes | -0.003 | -0.010 | -0.013 | 1.000 |
+
+The pair with the largest absolute correlation is order_amount and discount_pct at -0.095.
+
+### Analysis
+
+This data records synthetic completed Instamart orders across six Indian cities from April to September 2025, with amounts in INR. The distribution is strongly right-skewed: the mean (269.91) is about double the median (135.00) and the skewness is 4.61, so most orders are small and a few are very large. Using the 1.5×IQR rule, 897 orders lie above the upper fence of 645.30 and none below the lower fence; these are most likely genuine high-priced purchases such as electronics rather than errors, so they were kept. Among order_amount, discount_pct, quantity and delivery_minutes, the largest correlation in absolute value is order_amount with discount_pct at -0.095, with quantity close behind at +0.087. Both are very weak, and a correlation of this size does not establish causation.
+
+## Part B: Customer Segments and Lapse Prediction
+
+### RFM table
+
+[Paste the six figures printed by `python src/b1_rfm.py`: customers (reference 1,175); recency median / min / max (19 / 0 / 180); frequency mean / max (9.46 / 33); monetary mean / max (INR 2,552.06 / 14,766.55).]
+
+### K-means
+
+[Paste the K = 2 to 8 table (inertia and silhouette) printed by `python src/b2_kmeans.py`, then write 2–3 sentences: the elbow is at K = 4, K = 4 also has the highest silhouette, and why inertia always falls as K grows so it cannot pick K alone.]
+
+[Remaining Part B sections: segment profile and names, PCA, lapse cohort, preprocessing, models, class-balance experiment, interpretation and retention list.]
+
+## Part C: Support Ticket Triage with Guardrails
+
+[To be completed.]
+
+## Part D: Policy RAG Assistant and Refund Agent
+
+[To be completed.]
+
+## Limitations and Next Steps
+
+[To be completed at the end. Part B's limitations must state that the Premium flag is a post-hoc whole-window label, so the retention list is illustrative and not a leakage-free evaluation.]

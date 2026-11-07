@@ -194,13 +194,79 @@ This data records synthetic completed Instamart orders across six Indian cities 
 
 ### RFM table
 
-[Paste the six figures printed by `python src/b1_rfm.py`: customers (reference 1,175); recency median / min / max (19 / 0 / 180); frequency mean / max (9.46 / 33); monetary mean / max (INR 2,552.06 / 14,766.55).]
+Snapshot 2025-10-01 00:00:00, completed orders only.
 
-### K-means
+| Measure | Result |
+|---|---|
+| Customers | 1,175 |
+| Recency (days): median / min / max | 19 / 0 / 180 |
+| Frequency: mean / max | 9.46 / 33 |
+| Monetary (INR): mean / max | 2,552.06 / 14,766.55 |
 
-[Paste the K = 2 to 8 table (inertia and silhouette) printed by `python src/b2_kmeans.py`, then write 2–3 sentences: the elbow is at K = 4, K = 4 also has the highest silhouette, and why inertia always falls as K grows so it cannot pick K alone.]
+### K-means (K = 2 to 8, StandardScaler, n_init=10, random_state=42)
 
-[Remaining Part B sections: segment profile and names, PCA, lapse cohort, preprocessing, models, class-balance experiment, interpretation and retention list.]
+| K | Inertia | Silhouette |
+|---|---|---|
+| 2 | 1820.8 | 0.465 |
+| 3 | 1268.2 | 0.445 |
+| 4 | 743.1 | 0.526 |
+| 5 | 617.4 | 0.480 |
+| 6 | 503.2 | 0.482 |
+| 7 | 408.5 | 0.416 |
+| 8 | 366.5 | 0.412 |
+
+**Chosen K = 4.** [Write 2-3 sentences in your own words: inertia falls sharply from K=3 to K=4 and slowly afterwards (the elbow), K=4 has the highest silhouette (0.526), and four groups are easy for the business to act on. Then explain why K=8 always has lower inertia than K=2 but this alone cannot pick K.]
+
+### Segment profile (K = 4)
+
+Cluster numbers are only labels and carry no ordering.
+
+| Segment id | Name | Size | Mean recency (days) | Mean frequency | Mean monetary (INR) | Premium |
+|---|---|---|---|---|---|---|
+| 0 | Occasional Low-Value Buyers | 436 | 28.86 | 3.77 | 1,057.62 | No |
+| 1 | Premium Big Spenders | 138 | 24.12 | 6.77 | 7,129.70 | Yes |
+| 2 | Loyal Frequent Buyers | 419 | 8.77 | 19.40 | 3,410.02 | No |
+| 3 | At-Risk Customers | 182 | 109.04 | 2.20 | 685.99 | No |
+
+Recommended actions: [write one action per segment in your own words].
+
+### PCA
+
+Explained variance ratio of the two components: 0.634 and 0.218 (total 0.852).
+`outputs/customer_segments.csv` was written with columns customer_id, recency, frequency, monetary, segment_id, segment_name, is_premium.
+### Lapse problem
+
+Cutoff 2025-09-01. Cohort: customers with at least one completed order before the cutoff. Label `lapsed` = 1 if no completed order from 2025-09-01 to 2025-09-30.
+
+| Item | Result |
+|---|---|
+| Cohort | 1,156 customers |
+| Lapsed | 443 (38.32%) |
+| Train / test rows | 924 / 232 (`train_test_split`, test_size=0.2, stratify=y, random_state=42) |
+| Baseline (always "not lapsed") | accuracy 61.6%, lapsed-class F1 0 |
+
+Features (orders before the cutoff only): recency, frequency, monetary, average discount_pct, cancellation rate, average delivery_minutes, favourite category, city, age, gender, tenure in days. No order dated on or after 2025-09-01 entered the features, and the segment labels from the K-means step were not used as features.
+
+### Preprocessing without leakage
+
+City, gender and favourite category are one-hot encoded with `drop="first"`, and numeric features are standardised, inside a scikit-learn Pipeline fitted on the training rows only. No encoder, scaler or resampler saw test rows. No feature column contains a missing value (checked in code). The scaler's learned mean of frequency is 8.1147, while the full-cohort mean is 8.0285. [Write one sentence on why they differ: the scaler was fitted on the 924 training rows only.]
+
+### Tuning and test evaluation
+
+| Model | Grid | Best parameters | Best CV F1 |
+|---|---|---|---|
+| Logistic Regression | C in {0.01, 0.1, 1, 10, 100}, cv=5, scoring f1 | C = 10 | 0.656 |
+| Random Forest | max_depth in {3, 5, 8}, min_samples_leaf in {5, 10, 20}, cv=5, scoring f1 | max_depth = 8, min_samples_leaf = 10 | 0.683 |
+
+Test set, lapsed class:
+
+| Model | Confusion matrix [[TN, FP], [FN, TP]] | Precision | Recall | F1 |
+|---|---|---|---|---|
+| Logistic Regression | [[104, 39], [32, 57]] | 0.594 | 0.640 | 0.616 |
+| Random Forest | [[113, 30], [31, 58]] | 0.659 | 0.652 | 0.655 |
+
+**Selected model: Random Forest.** [Write 3-5 sentences: it has the higher F1, precision and recall, and fewer false positives; missing a lapsing customer costs more than wrongly targeting a loyal one, so recall matters, and the random forest does not give up recall to gain precision.]
+
 
 ## Part C: Support Ticket Triage with Guardrails
 

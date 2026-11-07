@@ -28,7 +28,10 @@ Run from the repository root (Python 3.11 or newer):
 9. `python src/a5_pandas.py`
 10. `python src/b1_rfm.py`
 11. `python src/b2_kmeans.py`
-
+12. `python src/b3_segments.py`
+13. `python src/b4_lapse_check.py`
+14. `python src/b5_models.py`
+15. `python src/b6_final.py`
 [Add the remaining Part B, C and D commands here as you build them, in running order, ending with the last script.]
 
 ## Part A: Data Foundation: Clean, Store, Query
@@ -215,20 +218,19 @@ Snapshot 2025-10-01 00:00:00, completed orders only.
 | 7 | 408.5 | 0.416 |
 | 8 | 366.5 | 0.412 |
 
-**Chosen K = 4.** [Write 2-3 sentences in your own words: inertia falls sharply from K=3 to K=4 and slowly afterwards (the elbow), K=4 has the highest silhouette (0.526), and four groups are easy for the business to act on. Then explain why K=8 always has lower inertia than K=2 but this alone cannot pick K.]
+**Chosen K = 4.** 
+I chose K = 4. Inertia drops sharply from K = 3 (1268.2) to K = 4 (743.1) and then falls much more slowly (617.4 at K = 5), so the elbow is at K = 4, and K = 4 also has the highest silhouette score (0.526). Inertia always falls as K grows because extra centroids sit closer to the points, so K = 8 (366.5) is lower than K = 2 (1820.8) even though its silhouette is worse (0.412 against 0.465). Inertia alone therefore cannot pick K, and I combined the elbow, the silhouette score and business interpretability, since four segments are easy for the business to name and act on.
 
-### Segment profile (K = 4)
+### Segment names and recommended actions
 
-Cluster numbers are only labels and carry no ordering.
+| Segment id | Name | Why this name (from the profile) | Recommended action |
+|---|---|---|---|
+| 1 | Premium Big Spenders (is_premium = True) | Highest mean monetary value (INR 7,129.70) from only 6.77 orders on average, so large baskets such as electronics | Give early access to electronics deals and a loyalty reward to protect these high-value customers. |
+| 2 | Loyal Frequent Buyers | Most frequent (19.40 orders) and most recent (8.77 days) buyers | Keep them engaged with bundle offers and a referral bonus. |
+| 3 | At-Risk Customers | Longest time since last order (109.04 days), lowest frequency (2.20) and spend (INR 685.99) | Send a win-back discount before they lapse completely. |
+| 0 | Occasional Low-Value Buyers | Few orders (3.77) and low spend (INR 1,057.62), but ordered fairly recently (28.86 days) | Nudge them with low-cost grocery reminders and a free-delivery threshold to raise basket size. |
 
-| Segment id | Name | Size | Mean recency (days) | Mean frequency | Mean monetary (INR) | Premium |
-|---|---|---|---|---|---|---|
-| 0 | Occasional Low-Value Buyers | 436 | 28.86 | 3.77 | 1,057.62 | No |
-| 1 | Premium Big Spenders | 138 | 24.12 | 6.77 | 7,129.70 | Yes |
-| 2 | Loyal Frequent Buyers | 419 | 8.77 | 19.40 | 3,410.02 | No |
-| 3 | At-Risk Customers | 182 | 109.04 | 2.20 | 685.99 | No |
-
-Recommended actions: [write one action per segment in your own words].
+Cluster numbers are only labels produced by K-means and carry no ordering. The Premium flag is set for the segment with the highest mean monetary value, whatever its cluster number.
 
 ### PCA
 
@@ -249,7 +251,16 @@ Features (orders before the cutoff only): recency, frequency, monetary, average 
 
 ### Preprocessing without leakage
 
-City, gender and favourite category are one-hot encoded with `drop="first"`, and numeric features are standardised, inside a scikit-learn Pipeline fitted on the training rows only. No encoder, scaler or resampler saw test rows. No feature column contains a missing value (checked in code). The scaler's learned mean of frequency is 8.1147, while the full-cohort mean is 8.0285. [Write one sentence on why they differ: the scaler was fitted on the 924 training rows only.]
+City, gender and favourite category are one-hot encoded with `drop="first"`, and numeric features are standardised, inside a scikit-learn Pipeline fitted on the training rows only. No encoder, scaler or resampler saw test rows. No feature column contains a missing value (checked in code). The scaler's learned mean of frequency is 8.1147, while the full-cohort mean is 8.0285. 
+
+**Why the two means differ.** The scaler learned a mean frequency of 8.1147 from the 924 training rows only, while the full-cohort mean is 8.0285 because it also includes the 232 test rows. The test rows pull the cohort average slightly lower, so the two values are close but not equal.
+
+**No test rows were seen during fitting.** Every encoder and scaler was fitted on the training rows only and then applied to the test rows, and the over-sampling step also used training rows only, so no encoder, scaler or resampler saw any test row.
+
+**No September data in the features.** Every feature was built from orders dated before 2025-09-01. No order dated on or after the cutoff entered the features, and orders from September were used only to create the lapsed label.
+
+**Segment labels not used as features.** The K-means segment labels from the segmentation step were kept out of the feature set, because they were computed from the whole order window, including September, and would leak the answer.
+
 
 ### Tuning and test evaluation
 
@@ -265,8 +276,53 @@ Test set, lapsed class:
 | Logistic Regression | [[104, 39], [32, 57]] | 0.594 | 0.640 | 0.616 |
 | Random Forest | [[113, 30], [31, 58]] | 0.659 | 0.652 | 0.655 |
 
-**Selected model: Random Forest.** [Write 3-5 sentences: it has the higher F1, precision and recall, and fewer false positives; missing a lapsing customer costs more than wrongly targeting a loyal one, so recall matters, and the random forest does not give up recall to gain precision.]
+**Selected model: Random Forest.** It beat logistic regression on every test metric for the lapsed class (F1 0.655 against 0.616, precision 0.659 against 0.594, recall 0.652 against 0.640) and made fewer false alarms (30 against 39). Missing a customer who is about to lapse costs more than sending a discount to a customer who would have stayed anyway, so recall on the lapsed class matters most, and the random forest does not give up recall to gain precision. Its best cross-validated F1 (0.683) was also higher than logistic regression's (0.656), so the advantage is not a fluke of the test split. The test F1 of 0.655 is well above the required 0.55.
 
+
+### Class-balance experiment
+
+Over-sampling was applied to the training set only: all original rows were kept and randomly chosen lapsed rows were duplicated (with replacement, random_state=42) until both classes had 570 rows. The best logistic regression was refitted on this data and evaluated on the original, unchanged test set.
+
+| Logistic regression | Precision | Recall | F1 |
+|---|---|---|---|
+| Un-balanced | 0.594 | 0.640 | 0.616 |
+| Over-sampled | 0.595 | 0.876 | 0.709 |
+
+Recall moved most (+0.236), while precision did not rise (+0.001). Recall moved most, rising from 0.640 to 0.876, while precision stayed flat (0.594 to 0.595). For the retention team this means the balanced model catches many more customers who are about to lapse, but it also flags about as many loyal customers by mistake as before, so more people get an offer who would have stayed anyway. This is a good trade only if a retention offer costs much less than losing a customer.
+
+### Interpretation
+
+Top five random forest features (feature_importances_):
+
+| Feature | Importance | Business reading |
+|---|---|---|
+| frequency | 0.283 | [customers who order often are far less likely to lapse] |
+| monetary | 0.274 | [customers who spend more are less likely to lapse] |
+| recency | 0.110 | [the longer since the last order, the higher the risk] |
+| avg_delivery | 0.064 | [slow deliveries may push customers away] |
+| cancel_rate | 0.052 | [cancellation behaviour carries some signal] |
+
+Logistic regression coefficients (standardised features):
+
+| Feature | Coefficient | Business reading |
+|---|---|---|
+| frequency | -1.589 | Strongest effect: each extra standard deviation of order frequency lowers lapse risk sharply. |
+| recency | +0.034 | Raises risk, but the effect is close to zero once frequency and monetary are in the model. |
+| cancel_rate | -0.132 | Small negative value; too weak to read as a real effect, so no business conclusion is drawn. |
+
+### Saved model
+
+The selected model (Random Forest) was saved with `joblib.dump` to `outputs/lapse_model.joblib`. After `joblib.load`, the reloaded model reproduces the original test predictions exactly (True).
+
+### Retention list
+
+Among the 40 Premium customers in the test set, the top 10 by predicted lapse probability were written to `outputs/retention_list.csv` (columns customer_id, lapse_probability, actually_lapsed). 1 of these 10 truly lapsed. The Premium flag comes from the whole-window RFM, which includes the September window that defines the lapse label, so it is a post-hoc whole-window label: the retention list is illustrative and not a leakage-free evaluation.
+
+The Premium flag comes from the whole-window RFM of the segmentation step, which includes the September window that defines the lapse label, so it is a post-hoc whole-window label: the retention list is illustrative and not a leakage-free evaluation.
+
+### Leakage controls
+
+No encoder, scaler or resampler saw test rows: all of them were fitted on the training rows only. No data from 2025-09-01 onwards entered the features, and the segment labels from the K-means step were not used as features.
 
 ## Part C: Support Ticket Triage with Guardrails
 
@@ -277,5 +333,6 @@ Test set, lapsed class:
 [To be completed.]
 
 ## Limitations and Next Steps
+The Premium flag is a post-hoc whole-window label, so the retention list is illustrative and not a leakage-free evaluation.The small test set (232 rows), or that more features could improve the model.
 
-[To be completed at the end. Part B's limitations must state that the Premium flag is a post-hoc whole-window label, so the retention list is illustrative and not a leakage-free evaluation.]
+The Premium flag comes from the whole-window RFM of the segmentation step, which includes the September window that defines the lapse label, so it is a post-hoc whole-window label: the retention list is illustrative and not a leakage-free evaluation.
